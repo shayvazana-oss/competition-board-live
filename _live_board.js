@@ -355,8 +355,18 @@
     p.style.color = delta>0 ? '#F5C542' : '#FF8A9B';
     p.style.animation = 'none'; p.getBoundingClientRect();
     p.style.animation = 'lbRise 1.1s ease-out';
+    // ניקוי מלא בסיום — כדי שהאנימציה והטקסט לא "יישארו" על השורה ולא יורצו מחדש
+    // כשהשורה זזה בדירוג (reorder) בעקבות הזנה לקבוצה אחרת.
+    clearTimeout(p._clr);
+    p._clr = setTimeout(function(){ p.style.animation = 'none'; p.textContent = ''; }, 1200);
   }
-  function glowRow(el){ if(!el) return; el.style.animation = 'none'; el.getBoundingClientRect(); el.style.animation = 'lbGlow 1.1s ease-out'; }
+  function glowRow(el){
+    if(!el) return;
+    el.style.animation = 'none'; el.getBoundingClientRect();
+    el.style.animation = 'lbGlow 1.1s ease-out';
+    clearTimeout(el._clrGlow);
+    el._clrGlow = setTimeout(function(){ el.style.animation = 'none'; }, 1200);
+  }
 
   // ════════════════════ תוצאות סופיות — אפקט וואו למנצחת ════════════════════
   var finaleEl = null, confettiStop = null;
