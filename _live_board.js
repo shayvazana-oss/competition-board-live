@@ -11,7 +11,7 @@
   var rowEls = {};          // groupIndex -> row element
   var prevRects = {};       // groupIndex -> DOMRect (for FLIP)
   var shownScore = {};      // groupIndex -> currently displayed (animating) score
-  var prevRank = {};        // groupIndex -> previous rank
+  var prevScore = {};       // groupIndex -> previous final score (לזיהוי מי עלה/ירד)
   var undoStack = [];       // { i, prevBonus }
   var selected = 0;
 
@@ -62,7 +62,8 @@
       '@keyframes lbPulse{0%{box-shadow:0 0 0 0 rgba(255,255,255,.6)}70%{box-shadow:0 0 0 10px rgba(255,255,255,0)}100%{box-shadow:0 0 0 0 rgba(255,255,255,0)}}'+
       '@keyframes lbRise{0%{opacity:0;transform:translateY(6px) scale(.9)}15%{opacity:1;transform:translateY(0) scale(1.05)}100%{opacity:0;transform:translateY(-34px) scale(1)}}'+
       '@keyframes lbGlow{0%,100%{box-shadow:0 0 0 0 rgba(245,197,66,0)}50%{box-shadow:0 0 34px 4px rgba(245,197,66,.55)}}'+
-      '@keyframes lbLive{0%,100%{opacity:1}50%{opacity:.35}}';
+      '@keyframes lbLive{0%,100%{opacity:1}50%{opacity:.35}}'+
+      '@keyframes lbPop{0%{opacity:0;transform:scale(.4)}100%{opacity:1;transform:scale(1)}}';
     document.head.appendChild(st);
   }
 
@@ -86,6 +87,14 @@
     header.appendChild(title);
 
     var headerBtns = make('div', { marginInlineStart:'auto', display:'flex', gap:'10px' });
+    var finaleBtn = make('button', {
+      fontFamily:'Rubik', fontWeight:'800', fontSize:'14px', color:'#3A2E00',
+      background:'linear-gradient(135deg,#F5C542,#E0A21E)', border:'none',
+      borderRadius:'10px', padding:'9px 16px', cursor:'pointer',
+      boxShadow:'0 8px 20px -8px rgba(245,197,66,.8)'
+    }, '🏆 תוצאות סופיות');
+    finaleBtn.onclick = showFinale;
+    headerBtns.appendChild(finaleBtn);
     var toggleBtn = make('button', hdrBtnStyle(), 'הסתר בקרה');
     toggleBtn.onclick = function(){ controlsOn = !controlsOn; controlBar.style.display = controlsOn ? 'flex' : 'none'; toggleBtn.textContent = controlsOn ? 'הסתר בקרה' : 'הצג בקרה'; requestRender(); };
     var fsBtn = make('button', hdrBtnStyle(), 'מסך מלא');
@@ -146,7 +155,7 @@
 
     document.addEventListener('keydown', function(e){
       if(!open) return;
-      if(e.key==='Escape') closeBoard();
+      if(e.key==='Escape'){ if(finaleEl) closeFinale(); else closeBoard(); }
       else if(e.key==='c'||e.key==='C'){ toggleBtn.click(); }
     });
   }
@@ -195,7 +204,7 @@
     db.ref('comp_scoring_data/groups/'+i+'/bonus').transaction(function(cur){
       return num(cur) + delta;
     });
-    flashPlus(i, delta);
+    // אין צורך להבהב כאן — render יזהה את שינוי הניקוד ויבהב את הקבוצה הנכונה בלבד.
   }
   function applyCustom(){
     var v = Number(amountInput.value)||0;
@@ -260,10 +269,14 @@
         }
       });
     }
-    // הדגשת מי שעלה בדירוג
-    sorted.forEach(function(x, rank){
-      if(!firstRender && prevRank[x.i]!=null && rank < prevRank[x.i]){ glowRow(rowEls[x.i]); }
-      prevRank[x.i] = rank;
+    // הדגשה לפי שינוי ניקוד — בדיוק הקבוצה שהנקודות שלה השתנו (עלייה=זהב+זוהר, ירידה=אדום).
+    // זה מונע את הבלבול של הדגשת שורות שרק "הוזזו" בעקבות קבוצה אחרת.
+    sorted.forEach(function(x){
+      if(!firstRender && prevScore[x.i]!=null){
+        var d = x.final - prevScore[x.i];
+        if(d !== 0){ flashPlus(x.i, d); if(d > 0) glowRow(rowEls[x.i]); }
+      }
+      prevScore[x.i] = x.final;
     });
     firstRender = false;
   }
@@ -317,12 +330,14 @@
     animateScore(el.querySelector('.lb-score'), x.i, x.final);
   }
 
+  var scoreGen = {}; // דור אנימציה לכל קבוצה — מבטל אנימציות שהוחלפו בעדכון חדש
   function animateScore(node, i, target){
+    var gen = (scoreGen[i] = (scoreGen[i] || 0) + 1);
     var start = shownScore[i]!=null ? shownScore[i] : target;
     if(start === target){ node.textContent = fmt(target); shownScore[i]=target; return; }
     var t0 = null, dur = 700;
     function step(ts){
-      if(shownScore[i] === target){ return; } // כבר הושלם (למשל ע"י רשת-הביטחון)
+      if(scoreGen[i] !== gen) return;        // הוחלף ע"י עדכון חדש — עצור
       if(t0==null) t0 = ts;
       var p = Math.min(1, (ts - t0)/dur);
       var ease = 1 - Math.pow(1-p, 3);
@@ -331,8 +346,8 @@
       if(p<1) requestAnimationFrame(step); else { shownScore[i] = target; }
     }
     requestAnimationFrame(step);
-    // רשת-ביטחון: אם rAF מושהה, ודא שהערך הסופי מוצג
-    setTimeout(function(){ if(shownScore[i] !== target){ node.textContent = fmt(target); shownScore[i] = target; } }, dur + 120);
+    // רשת-ביטחון (אם rAF מושהה) — פועלת רק אם זו עדיין האנימציה העדכנית לקבוצה
+    setTimeout(function(){ if(scoreGen[i] === gen && shownScore[i] !== target){ node.textContent = fmt(target); shownScore[i] = target; } }, dur + 120);
   }
 
   function flashPlus(i, delta){
@@ -345,17 +360,103 @@
   }
   function glowRow(el){ if(!el) return; el.style.animation = 'none'; el.getBoundingClientRect(); el.style.animation = 'lbGlow 1.1s ease-out'; }
 
+  // ════════════════════ תוצאות סופיות — אפקט וואו למנצחת ════════════════════
+  var finaleEl = null, confettiStop = null;
+  function showFinale(){
+    if(!latest || !latest.groups) return;
+    var groups = latest.groups.map(function(g, i){ var s = scoreOf(g); return { i:i, name: g.name||('קבוצה '+(i+1)), final:s.final }; });
+    var sorted = groups.slice().sort(function(a,b){ return b.final - a.final; });
+    var win = sorted[0], sec = sorted[1], thr = sorted[2];
+    if(!win) return;
+    closeFinale();
+
+    finaleEl = make('div', {
+      position:'absolute', inset:'0', zIndex:'50', overflow:'hidden',
+      background:'radial-gradient(900px 500px at 50% 25%, #241a5c 0%, #140f38 55%, #080518 100%)',
+      display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', textAlign:'center'
+    });
+    var canvas = make('canvas', { position:'absolute', inset:'0', width:'100%', height:'100%', pointerEvents:'none' });
+    finaleEl.appendChild(canvas);
+
+    // כפתור סגירה
+    var back = make('button', {
+      position:'absolute', top:'22px', insetInlineStart:'34px', zIndex:'3',
+      fontFamily:'Assistant', fontWeight:'700', fontSize:'15px', color:'#fff',
+      background:'rgba(255,255,255,.14)', border:'1px solid rgba(255,255,255,.25)',
+      borderRadius:'10px', padding:'10px 18px', cursor:'pointer'
+    }, '✕ חזרה ללוח');
+    back.onclick = closeFinale;
+    finaleEl.appendChild(back);
+
+    // שלב 1: מתח
+    var stage = make('div', { position:'relative', zIndex:'2', direction:'rtl' });
+    stage.innerHTML = '<div style="font-family:Rubik;font-weight:800;font-size:40px;color:#EBE7FF;animation:lbLive 1.1s infinite;">🥁 האלופה היא…</div>';
+    finaleEl.appendChild(stage);
+    overlay.appendChild(finaleEl);
+
+    // שלב 2: חשיפה + קונפטי אחרי המתח
+    setTimeout(function(){
+      stage.innerHTML =
+        '<div style="font-size:74px;line-height:1;animation:lbPop .7s cubic-bezier(.2,1.3,.35,1) both;">👑</div>'+
+        '<div style="margin-top:6px;font-family:Rubik;font-weight:800;font-size:20px;letter-spacing:2px;color:#F5C542;animation:lbLive 1.3s infinite;">אלופת התחרות</div>'+
+        '<div style="font-family:Rubik;font-weight:800;font-size:72px;line-height:1.05;margin-top:10px;background:linear-gradient(135deg,#F7DE7A,#F5C542,#E0A21E);-webkit-background-clip:text;background-clip:text;color:transparent;animation:lbPop .7s .05s cubic-bezier(.2,1.3,.35,1) both;">'+win.name+'</div>'+
+        '<div style="margin-top:14px;display:inline-block;font-family:Rubik;font-weight:800;font-size:30px;color:#fff;background:rgba(245,197,66,.16);border:1px solid rgba(245,197,66,.5);border-radius:16px;padding:10px 26px;">'+fmt(win.final)+' נק׳ 🏆</div>'+
+        (sec ? '<div style="margin-top:26px;display:flex;gap:26px;justify-content:center;color:#C8CEDD;font-family:Rubik;font-weight:700;font-size:18px;">'+
+          '<div>🥈 '+sec.name+' · '+fmt(sec.final)+'</div>'+
+          (thr ? '<div>🥉 '+thr.name+' · '+fmt(thr.final)+'</div>' : '')+
+        '</div>' : '');
+      startConfetti(canvas);
+    }, 1700);
+  }
+  function closeFinale(){
+    if(confettiStop){ confettiStop(); confettiStop = null; }
+    if(finaleEl && finaleEl.parentNode){ finaleEl.parentNode.removeChild(finaleEl); }
+    finaleEl = null;
+  }
+  function startConfetti(canvas){
+    var ctx = canvas.getContext('2d');
+    function size(){ canvas.width = canvas.offsetWidth; canvas.height = canvas.offsetHeight; }
+    size();
+    var cols = ['#F5C542','#7C6BF0','#0FB5A5','#EC6A9C','#4FA8F5','#FFFFFF'];
+    var N = 160, W = canvas.width, H = canvas.height, parts = [];
+    for(var k=0;k<N;k++){
+      parts.push({ x: (k*53%1)*0 + (k/N)*W, y: -(k%40)/40*H - 20, // פיזור התחלתי דטרמיניסטי
+        vx: ((k%7)-3)*0.4, vy: 2 + (k%5)*0.9, s: 5 + (k%6), rot: (k%360),
+        vr: ((k%5)-2)*4, c: cols[k%cols.length] });
+    }
+    var running = true, frames = 0;
+    function frame(){
+      if(!running) return;
+      frames++;
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      for(var i=0;i<parts.length;i++){
+        var p = parts[i];
+        p.x += p.vx; p.y += p.vy; p.rot += p.vr; p.vy += 0.02;
+        if(p.y > canvas.height + 20){ p.y = -20; p.x = (i/parts.length)*canvas.width; p.vy = 2 + (i%5)*0.9; }
+        ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot*Math.PI/180);
+        ctx.fillStyle = p.c; ctx.fillRect(-p.s/2, -p.s/2, p.s, p.s*0.6);
+        ctx.restore();
+      }
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+    var onResize = function(){ size(); };
+    window.addEventListener('resize', onResize);
+    confettiStop = function(){ running = false; window.removeEventListener('resize', onResize); };
+  }
+
   // ════════════════════ פתיחה/סגירה ════════════════════
   function openBoard(){
     open = true;
     overlay.style.display = 'flex';
     controlBar.style.display = controlsOn ? 'flex' : 'none';
-    firstRender = true; prevRank = {}; shownScore = {};
+    firstRender = true; prevScore = {}; shownScore = {};
     buildGroupButtons();
     requestRender();
   }
   function closeBoard(){
     open = false;
+    closeFinale();
     if(document.fullscreenElement){ try{ document.exitFullscreen(); }catch(e){} }
     overlay.style.display = 'none';
   }
