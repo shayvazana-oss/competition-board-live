@@ -11,7 +11,7 @@
   var rowEls = {};          // groupIndex -> row element
   var prevRects = {};       // groupIndex -> DOMRect (for FLIP)
   var shownScore = {};      // groupIndex -> currently displayed (animating) score
-  var prevScore = {};       // groupIndex -> previous final score (לזיהוי מי עלה/ירד)
+  var pendingFlash = null;  // { i, delta } — אפקט "הועלו נקודות", רק לקבוצה שהמשתמש הזין לה
   var undoStack = [];       // { i, prevBonus }
   var selected = 0;
 
@@ -204,7 +204,8 @@
     db.ref('comp_scoring_data/groups/'+i+'/bonus').transaction(function(cur){
       return num(cur) + delta;
     });
-    // אין צורך להבהב כאן — render יזהה את שינוי הניקוד ויבהב את הקבוצה הנכונה בלבד.
+    // האפקט נקשר ישירות לפעולה — רק הקבוצה הזו תבהב, בעדכון הבא של render.
+    pendingFlash = { i: i, delta: delta };
   }
   function applyCustom(){
     var v = Number(amountInput.value)||0;
@@ -269,15 +270,12 @@
         }
       });
     }
-    // הדגשה לפי שינוי ניקוד — בדיוק הקבוצה שהנקודות שלה השתנו (עלייה=זהב+זוהר, ירידה=אדום).
-    // זה מונע את הבלבול של הדגשת שורות שרק "הוזזו" בעקבות קבוצה אחרת.
-    sorted.forEach(function(x){
-      if(!firstRender && prevScore[x.i]!=null){
-        var d = x.final - prevScore[x.i];
-        if(d !== 0){ flashPlus(x.i, d); if(d > 0) glowRow(rowEls[x.i]); }
-      }
-      prevScore[x.i] = x.final;
-    });
+    // אפקט "הועלו נקודות" — אך ורק על הקבוצה שהמשתמש הזין לה עכשיו (pendingFlash).
+    // שום קבוצה אחרת לא מבהבת, גם אם הוזזה בדירוג או השתנתה ממקור אחר.
+    if(pendingFlash){
+      var pf = pendingFlash; pendingFlash = null;
+      if(rowEls[pf.i]){ flashPlus(pf.i, pf.delta); if(pf.delta > 0) glowRow(rowEls[pf.i]); }
+    }
     firstRender = false;
   }
 
@@ -450,7 +448,7 @@
     open = true;
     overlay.style.display = 'flex';
     controlBar.style.display = controlsOn ? 'flex' : 'none';
-    firstRender = true; prevScore = {}; shownScore = {};
+    firstRender = true; pendingFlash = null; shownScore = {};
     buildGroupButtons();
     requestRender();
   }
